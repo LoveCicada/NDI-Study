@@ -1,0 +1,17 @@
+@echo off
+rem 复制本文件为 build_env.bat 并按需修改
+rem 若系统环境变量 QT_DIR 已设置（指向 ...\msvc2019_64\bin），build_env.bat 会自动转换
+
+rem 默认 Qt kit 根目录（与 QT_DIR=D:\soft\qt5152\5.15.2\msvc2019_64\bin 对应）
+set "CMAKE_PREFIX_PATH=D:\soft\qt5152\5.15.2\msvc2019_64"
+
+if defined QT_DIR (
+    if /i "%QT_DIR:~-4%"=="\bin" (
+        set "CMAKE_PREFIX_PATH=%QT_DIR:~0,-4%"
+    ) else (
+        set "CMAKE_PREFIX_PATH=%QT_DIR%"
+    )
+)
+
+rem set "CMAKE_BIN=C:\Program Files\CMake\bin"
+rem set "VS_GENERATOR=Visual Studio 17 2022"

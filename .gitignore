@@ -1,0 +1,30 @@
+# Third-party SDKs (本地自行下载，不入库)
+third_party/*
+!third_party/README.md
+
+# Build
+build/
+build_env.bat
+out/
+cmake-build-*/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Qt generated
+*.autosave
+moc_*.cpp
+ui_*.h
+qrc_*.cpp
+
+# Runtime binaries
+*.dll
+*.exe
+!build_env.bat.example
+
+# OS
+Thumbs.db
+Desktop.ini
