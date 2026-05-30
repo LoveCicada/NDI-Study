@@ -17,7 +17,11 @@
 #include <QSpinBox>
 #include <QTimer>
 
+#include <atomic>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
+#include <thread>
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -28,6 +32,7 @@ public:
 
 private slots:
     void onRefreshSources();
+    void onAutoRefreshSources();
     void onConnect();
     void onDisconnect();
     void onStartReceive();
@@ -41,6 +46,9 @@ private slots:
 private:
     NdiReceiverConfig buildConfig() const;
     void setupUi();
+    void requestSourceRefresh(uint32_t waitMs);
+    void applyRefreshedSources(std::vector<NdiSourceInfo> sources);
+    void sourceRefreshWorker();
     void onVideoFrame(const NdiVideoFrameData& frame);
     void onAudioFrame(const NdiAudioFrameData& frame);
     static QString fourCcToString(NDIlib_FourCC_video_type_e fourCC);
@@ -74,6 +82,15 @@ private:
     VideoPreviewWidget* preview_ = nullptr;
     QTimer* statsTimer_ = nullptr;
     QTimer* refreshTimer_ = nullptr;
+
+    std::mutex finderMutex_;
+    std::mutex refreshRequestMutex_;
+    std::condition_variable refreshCv_;
+    std::thread sourceRefreshThread_;
+    std::atomic<bool> shutdown_{false};
+    std::atomic<bool> refreshPending_{false};
+    std::atomic<bool> sourceRefreshInProgress_{false};
+    uint32_t pendingRefreshWaitMs_ = 250;
 
     std::vector<NdiSourceInfo> sources_;
     NDIlib_FourCC_video_type_e lastFourCC_ = NDIlib_FourCC_type_UYVY;

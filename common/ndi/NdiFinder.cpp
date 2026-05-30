@@ -1,7 +1,7 @@
 #include "NdiFinder.h"
 
-NdiFinder::NdiFinder(uint32_t waitMs)
-    : waitMs_(waitMs) {
+NdiFinder::NdiFinder(uint32_t defaultWaitMs)
+    : defaultWaitMs_(defaultWaitMs) {
     NDIlib_find_create_t desc{};
     desc.show_local_sources = true;
     desc.p_groups = groups_.empty() ? nullptr : groups_.c_str();
@@ -28,14 +28,15 @@ void NdiFinder::setGroups(const std::string& groups) {
     finder_ = NDIlib_find_create_v2(&desc);
 }
 
-std::vector<NdiSourceInfo> NdiFinder::refresh() {
+std::vector<NdiSourceInfo> NdiFinder::refresh(uint32_t waitMs) {
     sources_.clear();
     if (!finder_) {
         return sources_;
     }
 
+    const uint32_t effectiveWait = waitMs > 0 ? waitMs : defaultWaitMs_;
     // wait_for_sources 仅在源数量变化时返回 true；超时仍应读取当前快照。
-    NDIlib_find_wait_for_sources(finder_, waitMs_);
+    NDIlib_find_wait_for_sources(finder_, effectiveWait);
 
     uint32_t count = 0;
     const NDIlib_source_t* raw = NDIlib_find_get_current_sources(finder_, &count);

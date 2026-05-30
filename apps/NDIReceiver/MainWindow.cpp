@@ -45,12 +45,18 @@ MainWindow::MainWindow(NdiContext& ndiContext, QWidget* parent)
     receiver_ = std::make_unique<NdiReceiver>();
     audioPlayer_ = std::make_unique<SdlAudioPlayer>();
     setupUi();
-    onRefreshSources();
+    sourceRefreshThread_ = std::thread([this]() { sourceRefreshWorker(); });
+    QTimer::singleShot(0, this, [this]() { requestSourceRefresh(2000); });
 }
 
 MainWindow::~MainWindow() {
+    shutdown_.store(true);
+    refreshCv_.notify_one();
     onStopReceive();
     onDisconnect();
+    if (sourceRefreshThread_.joinable()) {
+        sourceRefreshThread_.join();
+    }
 }
 
 void MainWindow::setupUi() {
@@ -151,7 +157,7 @@ void MainWindow::setupUi() {
     statsTimer_ = new QTimer(this);
     connect(statsTimer_, &QTimer::timeout, this, &MainWindow::updateStats);
     refreshTimer_ = new QTimer(this);
-    connect(refreshTimer_, &QTimer::timeout, this, &MainWindow::onRefreshSources);
+    connect(refreshTimer_, &QTimer::timeout, this, &MainWindow::onAutoRefreshSources);
     refreshTimer_->start(2000);
     connect(refreshBtn_, &QPushButton::clicked, this, &MainWindow::onRefreshSources);
     connect(connectBtn_, &QPushButton::clicked, this, &MainWindow::onConnect);
@@ -237,11 +243,76 @@ void MainWindow::onSaveFramePng() {
     QMessageBox::information(this, tr("保存 PNG"), tr("已保存到:\n%1").arg(path));
 }
 
-void MainWindow::onRefreshSources() {
+void MainWindow::requestSourceRefresh(uint32_t waitMs) {
     if (receiver_->isRunning()) {
         return;
     }
-    sources_ = finder_->refresh();
+    {
+        std::lock_guard<std::mutex> lock(refreshRequestMutex_);
+        pendingRefreshWaitMs_ = waitMs;
+        refreshPending_.store(true);
+    }
+    refreshCv_.notify_one();
+}
+
+void MainWindow::sourceRefreshWorker() {
+    while (!shutdown_.load()) {
+        uint32_t waitMs = 250;
+        {
+            std::unique_lock<std::mutex> lock(refreshRequestMutex_);
+            refreshCv_.wait(lock, [this]() {
+                return shutdown_.load() || refreshPending_.load();
+            });
+            if (shutdown_.load()) {
+                break;
+            }
+            waitMs = pendingRefreshWaitMs_;
+            refreshPending_.store(false);
+        }
+
+        if (receiver_->isRunning()) {
+            continue;
+        }
+
+        sourceRefreshInProgress_.store(true);
+        std::vector<NdiSourceInfo> result;
+        {
+            std::lock_guard<std::mutex> lock(finderMutex_);
+            if (finder_) {
+                result = finder_->refresh(waitMs);
+            }
+        }
+
+        if (shutdown_.load()) {
+            break;
+        }
+
+        QMetaObject::invokeMethod(
+            this,
+            [this, result = std::move(result)]() mutable {
+                applyRefreshedSources(std::move(result));
+            },
+            Qt::QueuedConnection);
+    }
+}
+
+void MainWindow::onRefreshSources() {
+    requestSourceRefresh(2000);
+}
+
+void MainWindow::onAutoRefreshSources() {
+    if (sourceRefreshInProgress_.load()) {
+        return;
+    }
+    requestSourceRefresh(250);
+}
+
+void MainWindow::applyRefreshedSources(std::vector<NdiSourceInfo> sources) {
+    sourceRefreshInProgress_.store(false);
+    if (shutdown_.load() || receiver_->isRunning()) {
+        return;
+    }
+    sources_ = std::move(sources);
     const int prevIndex = sourceCombo_->currentIndex();
     const QString prevText = prevIndex >= 0 ? sourceCombo_->currentText() : QString();
     sourceCombo_->clear();
@@ -265,12 +336,12 @@ void MainWindow::onRefreshSources() {
 }
 
 void MainWindow::onConnect() {
+    onStopReceive();
     const int idx = sourceCombo_->currentIndex();
     if (idx < 0 || idx >= static_cast<int>(sources_.size())) {
         QMessageBox::warning(this, tr("连接"), tr("请先选择 NDI 源"));
         return;
     }
-    receiver_->destroy();
     if (!receiver_->create(buildConfig())) {
         QMessageBox::critical(this, tr("连接"), tr("创建接收器失败"));
         return;
@@ -288,7 +359,6 @@ void MainWindow::onStartReceive() {
         return;
     }
     refreshTimer_->stop();
-    onRefreshSources();
     const int idx = sourceCombo_->currentIndex();
     if (idx < 0 || idx >= static_cast<int>(sources_.size())) {
         refreshTimer_->start(2000);

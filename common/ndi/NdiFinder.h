@@ -13,7 +13,7 @@ struct NdiSourceInfo {
 
 class NdiFinder {
 public:
-    explicit NdiFinder(uint32_t waitMs = 3000);
+    explicit NdiFinder(uint32_t defaultWaitMs = 250);
     ~NdiFinder();
 
     NdiFinder(const NdiFinder&) = delete;
@@ -21,12 +21,13 @@ public:
 
     void setGroups(const std::string& groups);
 
-    std::vector<NdiSourceInfo> refresh();
+    // waitMs == 0 时使用构造时的 defaultWaitMs_
+    std::vector<NdiSourceInfo> refresh(uint32_t waitMs = 0);
     const std::vector<NdiSourceInfo>& sources() const { return sources_; }
 
 private:
     NDIlib_find_instance_t finder_ = nullptr;
-    uint32_t waitMs_;
+    uint32_t defaultWaitMs_;
     std::string groups_;
     std::vector<NdiSourceInfo> sources_;
 };

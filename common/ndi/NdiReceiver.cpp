@@ -22,9 +22,11 @@ std::vector<uint8_t> copyVideoBuffer(const NDIlib_video_frame_v2_t& frame) {
         return out;
     }
 
+    const bool isBgra = frame.FourCC == NDIlib_FourCC_type_BGRA
+        || frame.FourCC == NDIlib_FourCC_type_BGRX;
     const int stride = frame.line_stride_in_bytes > 0
         ? frame.line_stride_in_bytes
-        : frame.xres * 4;
+        : (isBgra ? frame.xres * 4 : frame.xres * 2);
     const size_t size = static_cast<size_t>(stride) * static_cast<size_t>(frame.yres);
     std::vector<uint8_t> out(size);
     std::memcpy(out.data(), frame.p_data, size);
@@ -130,6 +132,11 @@ NDIlib_recv_color_format_e NdiReceiver::mapColorFormat(NdiRecvColorFormatChoice 
 bool NdiReceiver::create(const NdiReceiverConfig& config) {
     destroy();
     config_ = config;
+
+    {
+        std::lock_guard<std::mutex> lock(statsMutex_);
+        stats_ = {};
+    }
 
     NDIlib_recv_create_v3_t desc{};
     desc.color_format = mapColorFormat(config_.colorFormat);

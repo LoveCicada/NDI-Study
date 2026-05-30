@@ -16,10 +16,17 @@ VideoPreviewWidget::VideoPreviewWidget(QWidget* parent)
     setAttribute(Qt::WA_NoSystemBackground);
     setAutoFillBackground(false);
     setMinimumSize(640, 360);
+    setStyleSheet(QStringLiteral("background-color: #1a1a1f;"));
 
-    auto* timer = new QTimer(this);
-    connect(timer, &QTimer::timeout, this, &VideoPreviewWidget::onRenderTick);
-    timer->start(33);
+    renderTimer_ = new QTimer(this);
+    renderTimer_->setInterval(33);
+    connect(renderTimer_, &QTimer::timeout, this, &VideoPreviewWidget::onRenderTick);
+    renderTimer_->start();
+
+    resizeDebounceTimer_ = new QTimer(this);
+    resizeDebounceTimer_->setSingleShot(true);
+    resizeDebounceTimer_->setInterval(100);
+    connect(resizeDebounceTimer_, &QTimer::timeout, this, &VideoPreviewWidget::applyDebouncedResize);
 }
 
 VideoPreviewWidget::~VideoPreviewWidget() = default;
@@ -125,20 +132,18 @@ void VideoPreviewWidget::onRenderTick() {
         return;
     }
 
-    ensureRenderer();
-    if (!renderer_) {
-        return;
-    }
-
+    bool hasFrame = false;
     std::vector<uint8_t> local;
     int w = 0;
     int h = 0;
     int stride = 0;
     NDIlib_FourCC_video_type_e fourCC = NDIlib_FourCC_type_UYVY;
-    bool hasFrame = false;
     {
         std::lock_guard<std::mutex> lock(frameMutex_);
         hasFrame = hasFrame_;
+        if (!hasFrame && !alphaCheckerBackground_) {
+            return;
+        }
         if (hasFrame) {
             local = displayFrame_;
             w = displayWidth_;
@@ -146,6 +151,11 @@ void VideoPreviewWidget::onRenderTick() {
             stride = displayStride_;
             fourCC = displayFourCC_;
         }
+    }
+
+    ensureRenderer();
+    if (!renderer_) {
+        return;
     }
 
     renderer_->setAlphaCheckerBackground(alphaCheckerBackground_);
@@ -165,15 +175,22 @@ void VideoPreviewWidget::onRenderTick() {
 
 void VideoPreviewWidget::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
-    ensureRenderer();
+}
+
+void VideoPreviewWidget::applyDebouncedResize() {
+    if (!renderer_) {
+        return;
+    }
+    renderer_->resize(pendingResizeWidth_, pendingResizeHeight_);
     markRenderDirty();
 }
 
 void VideoPreviewWidget::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
-    ensureRenderer();
-    if (renderer_) {
-        renderer_->resize(width(), height());
+    pendingResizeWidth_ = width();
+    pendingResizeHeight_ = height();
+    if (!renderer_) {
+        return;
     }
-    markRenderDirty();
+    resizeDebounceTimer_->start();
 }

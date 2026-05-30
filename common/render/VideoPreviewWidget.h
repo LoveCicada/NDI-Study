@@ -9,6 +9,8 @@
 #include <memory>
 #include <mutex>
 
+class QTimer;
+
 class VideoPreviewWidget : public QWidget {
     Q_OBJECT
 
@@ -32,8 +34,13 @@ private:
     void ensureRenderer();
     void onRenderTick();
     void markRenderDirty();
+    void applyDebouncedResize();
 
     std::unique_ptr<Dx11VideoRenderer> renderer_;
+    QTimer* renderTimer_ = nullptr;
+    QTimer* resizeDebounceTimer_ = nullptr;
+    int pendingResizeWidth_ = 0;
+    int pendingResizeHeight_ = 0;
     mutable std::mutex frameMutex_;
     std::vector<uint8_t> displayFrame_;
     int displayWidth_ = 0;
