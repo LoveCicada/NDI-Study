@@ -38,6 +38,17 @@ bool NdiSender::sendVideoBGRA(const uint8_t* data, int width, int height, int st
         return false;
     }
 
+    const int rowStride = stride > 0 ? stride : width * 4;
+    const size_t size = static_cast<size_t>(rowStride) * static_cast<size_t>(height);
+    videoSendBufferIndex_ = 1 - videoSendBufferIndex_;
+    auto& owned = videoSendBuffers_[videoSendBufferIndex_];
+    owned.resize(size);
+    for (int y = 0; y < height; ++y) {
+        std::memcpy(owned.data() + static_cast<size_t>(y) * rowStride,
+                    data + static_cast<size_t>(y) * rowStride,
+                    static_cast<size_t>(width) * 4);
+    }
+
     NDIlib_video_frame_v2_t frame{};
     frame.xres = width;
     frame.yres = height;
@@ -46,8 +57,8 @@ bool NdiSender::sendVideoBGRA(const uint8_t* data, int width, int height, int st
     frame.frame_rate_D = frameRateD;
     frame.picture_aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
     frame.frame_format_type = NDIlib_frame_format_type_progressive;
-    frame.line_stride_in_bytes = stride;
-    frame.p_data = const_cast<uint8_t*>(data);
+    frame.line_stride_in_bytes = rowStride;
+    frame.p_data = owned.data();
 
     NDIlib_send_send_video_async_v2(sender_, &frame);
     return true;

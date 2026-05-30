@@ -4,10 +4,12 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QMessageBox>
+#include <QSlider>
 #include <QTimer>
 #include <QVBoxLayout>
 
 #include <chrono>
+#include <algorithm>
 
 MainWindow::MainWindow(NdiContext& ndiContext, QWidget* parent)
     : QMainWindow(parent)
@@ -29,7 +31,7 @@ MainWindow::~MainWindow() {
 
 void MainWindow::setupUi() {
     setWindowTitle(tr("NDISender Demo"));
-    resize(480, 520);
+    resize(480, 560);
 
     auto* central = new QWidget(this);
     auto* layout = new QVBoxLayout(central);
@@ -48,8 +50,52 @@ void MainWindow::setupUi() {
 
     auto* captureGroup = new QGroupBox(tr("采集"), central);
     auto* captureLayout = new QFormLayout(captureGroup);
+    videoSourceCombo_ = new QComboBox(captureGroup);
+    videoSourceCombo_->addItem(tr("DXGI 屏幕采集"), static_cast<int>(NdiVideoSourceChoice::ScreenCapture));
+    videoSourceCombo_->addItem(tr("Alpha 测试图"), static_cast<int>(NdiVideoSourceChoice::AlphaTestPattern));
+
     outputCombo_ = new QComboBox(captureGroup);
     refreshOutputsBtn_ = new QPushButton(tr("刷新显示器"), captureGroup);
+    screenCaptureRow_ = new QWidget(captureGroup);
+    auto* screenCaptureLayout = new QVBoxLayout(screenCaptureRow_);
+    screenCaptureLayout->setContentsMargins(0, 0, 0, 0);
+    screenCaptureLayout->addWidget(outputCombo_);
+    screenCaptureLayout->addWidget(refreshOutputsBtn_);
+
+    patternSizeRow_ = new QWidget(captureGroup);
+    auto* patternSizeLayout = new QHBoxLayout(patternSizeRow_);
+    patternSizeLayout->setContentsMargins(0, 0, 0, 0);
+    patternWidthSpin_ = new QSpinBox(patternSizeRow_);
+    patternWidthSpin_->setRange(64, 3840);
+    patternWidthSpin_->setValue(1280);
+    patternHeightSpin_ = new QSpinBox(patternSizeRow_);
+    patternHeightSpin_->setRange(64, 2160);
+    patternHeightSpin_->setValue(720);
+    patternSizeLayout->addWidget(new QLabel(tr("宽"), patternSizeRow_));
+    patternSizeLayout->addWidget(patternWidthSpin_);
+    patternSizeLayout->addWidget(new QLabel(tr("高"), patternSizeRow_));
+    patternSizeLayout->addWidget(patternHeightSpin_);
+    patternSizeRow_->setVisible(false);
+
+    patternAlphaRow_ = new QWidget(captureGroup);
+    auto* patternAlphaLayout = new QHBoxLayout(patternAlphaRow_);
+    patternAlphaLayout->setContentsMargins(0, 0, 0, 0);
+    patternAlphaSlider_ = new QSlider(Qt::Horizontal, patternAlphaRow_);
+    patternAlphaSlider_->setRange(0, 100);
+    patternAlphaSlider_->setValue(100);
+    patternAlphaValueLabel_ = new QLabel(tr("100%"), patternAlphaRow_);
+    patternAlphaValueLabel_->setMinimumWidth(40);
+    patternAlphaLayout->addWidget(patternAlphaSlider_, 1);
+    patternAlphaLayout->addWidget(patternAlphaValueLabel_);
+    patternAlphaRow_->setVisible(false);
+
+    patternAlphaHintLabel_ = new QLabel(
+        tr("调节推流 Alpha 倍率；Sender 无本地预览。下方状态栏显示「发送 Alpha」范围，"
+           "Receiver 端在预览 Alpha=100% 时可观察 NDI 是否保留透明。"),
+        captureGroup);
+    patternAlphaHintLabel_->setWordWrap(true);
+    patternAlphaHintLabel_->setVisible(false);
+
     enableVideoCheck_ = new QCheckBox(tr("启用视频"), captureGroup);
     enableVideoCheck_->setChecked(true);
     enableAudioCheck_ = new QCheckBox(tr("启用音频 (WASAPI Loopback)"), captureGroup);
@@ -61,8 +107,11 @@ void MainWindow::setupUi() {
     hxBitrateSpin_->setRange(0.1, 2.0);
     hxBitrateSpin_->setSingleStep(0.1);
     hxBitrateSpin_->setValue(1.0);
-    captureLayout->addRow(tr("显示器"), outputCombo_);
-    captureLayout->addRow(refreshOutputsBtn_);
+    captureLayout->addRow(tr("视频源"), videoSourceCombo_);
+    captureLayout->addRow(tr("屏幕"), screenCaptureRow_);
+    captureLayout->addRow(tr("测试图尺寸"), patternSizeRow_);
+    captureLayout->addRow(tr("测试图 Alpha"), patternAlphaRow_);
+    captureLayout->addRow(patternAlphaHintLabel_);
     captureLayout->addRow(enableVideoCheck_);
     captureLayout->addRow(enableAudioCheck_);
     captureLayout->addRow(clockVideoCheck_);
@@ -83,8 +132,41 @@ void MainWindow::setupUi() {
     setCentralWidget(central);
 
     connect(refreshOutputsBtn_, &QPushButton::clicked, this, &MainWindow::onRefreshOutputs);
+    connect(videoSourceCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::onVideoSourceChanged);
+    connect(patternAlphaSlider_, &QSlider::valueChanged, this, [this](int value) {
+        patternAlphaValueLabel_->setText(tr("%1%").arg(value));
+        patternAlphaScale_.store(static_cast<float>(value) / 100.f);
+        alphaPattern_.setAlphaScale(patternAlphaScale_.load());
+    });
+    statusTimer_ = new QTimer(this);
+    connect(statusTimer_, &QTimer::timeout, this, &MainWindow::updateStatus);
     connect(startBtn_, &QPushButton::clicked, this, &MainWindow::onStart);
     connect(stopBtn_, &QPushButton::clicked, this, &MainWindow::onStop);
+    updateCaptureControls();
+}
+
+void MainWindow::onVideoSourceChanged() {
+    updateCaptureControls();
+}
+
+void MainWindow::updateCaptureControls() {
+    const auto source = static_cast<NdiVideoSourceChoice>(videoSourceCombo_->currentData().toInt());
+    const bool pattern = source == NdiVideoSourceChoice::AlphaTestPattern;
+    screenCaptureRow_->setVisible(!pattern);
+    patternSizeRow_->setVisible(pattern);
+    patternAlphaRow_->setVisible(pattern);
+    patternAlphaHintLabel_->setVisible(pattern);
+    if (pattern) {
+        modeCombo_->setCurrentIndex(modeCombo_->findData(static_cast<int>(NdiSendMode::HighBandwidth)));
+        modeCombo_->setEnabled(false);
+        enableAudioCheck_->setChecked(false);
+        enableAudioCheck_->setEnabled(false);
+        clockVideoCheck_->setChecked(false);
+    } else {
+        modeCombo_->setEnabled(true);
+        enableAudioCheck_->setEnabled(true);
+    }
 }
 
 NdiSenderConfig MainWindow::buildConfig() const {
@@ -115,13 +197,29 @@ void MainWindow::onStart() {
         return;
     }
 
-    const int outputIndex = outputCombo_->currentData().toInt();
-    if (!capture_->open(outputIndex)) {
-        QMessageBox::critical(this, tr("采集"), tr("打开 DXGI 屏幕采集失败"));
-        return;
+    activeVideoSource_ = static_cast<NdiVideoSourceChoice>(videoSourceCombo_->currentData().toInt());
+    patternWidth_ = patternWidthSpin_->value();
+    patternHeight_ = patternHeightSpin_->value();
+    patternAlphaScale_.store(static_cast<float>(patternAlphaSlider_->value()) / 100.f);
+    alphaPattern_.setSize(patternWidth_, patternHeight_);
+    alphaPattern_.setAlphaScale(patternAlphaScale_.load());
+
+    if (activeVideoSource_ == NdiVideoSourceChoice::ScreenCapture) {
+        const int outputIndex = outputCombo_->currentData().toInt();
+        if (!capture_->open(outputIndex)) {
+            QMessageBox::critical(this, tr("采集"), tr("打开 DXGI 屏幕采集失败"));
+            return;
+        }
     }
 
     const auto cfg = buildConfig();
+    if (activeVideoSource_ == NdiVideoSourceChoice::AlphaTestPattern &&
+        cfg.mode != NdiSendMode::HighBandwidth) {
+        capture_->close();
+        QMessageBox::warning(this, tr("Alpha 测试"), tr("Alpha 测试图仅支持 High Bandwidth 模式"));
+        return;
+    }
+
     activeConfig_ = cfg;
     if (!sender_->create(cfg)) {
         capture_->close();
@@ -129,7 +227,8 @@ void MainWindow::onStart() {
         return;
     }
 
-    if (cfg.mode == NdiSendMode::HxH264 && cfg.enableVideo) {
+    if (activeVideoSource_ == NdiVideoSourceChoice::ScreenCapture &&
+        cfg.mode == NdiSendMode::HxH264 && cfg.enableVideo) {
         const int baseBitrate = sender_->getTargetBitrate(
             capture_->width(), capture_->height(), frameRateN_, frameRateD_);
         const uint32_t bitrate = static_cast<uint32_t>(baseBitrate * cfg.hxBitrateMultiplier);
@@ -144,7 +243,7 @@ void MainWindow::onStart() {
         }
     }
 
-    if (cfg.enableAudio) {
+    if (cfg.enableAudio && activeVideoSource_ == NdiVideoSourceChoice::ScreenCapture) {
         audioCapture_->start([this](const float* audioData, int sampleRate, int channels, int frames) {
             sender_->sendAudio(audioData, sampleRate, channels, frames);
         });
@@ -152,15 +251,24 @@ void MainWindow::onStart() {
 
     running_.store(true);
     captureThread_ = std::thread(&MainWindow::runCaptureLoop, this);
-    statusLabel_->setText(tr("状态: 推流中 (%1x%2)")
-                              .arg(capture_->width())
-                              .arg(capture_->height()));
+    statusTimer_->start(500);
+
+    if (activeVideoSource_ == NdiVideoSourceChoice::AlphaTestPattern) {
+        statusLabel_->setText(tr("状态: Alpha 测试图推流中 (%1x%2)")
+                                  .arg(patternWidth_)
+                                  .arg(patternHeight_));
+    } else {
+        statusLabel_->setText(tr("状态: 推流中 (%1x%2)")
+                                  .arg(capture_->width())
+                                  .arg(capture_->height()));
+    }
 }
 
 void MainWindow::onStop() {
     if (!running_.exchange(false)) {
         return;
     }
+    statusTimer_->stop();
     if (captureThread_.joinable()) {
         captureThread_.join();
     }
@@ -174,13 +282,34 @@ void MainWindow::onStop() {
 
 void MainWindow::runCaptureLoop() {
     CapturedFrame frame;
+    std::vector<uint8_t> patternBuffer;
+    uint64_t patternFrameIndex = 0;
+
     while (running_.load()) {
-        if (!capture_->captureFrame(frame, 33)) {
+        const auto cfg = activeConfig_;
+        if (!cfg.enableVideo) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
             continue;
         }
 
-        const auto cfg = activeConfig_;
-        if (!cfg.enableVideo) {
+        if (activeVideoSource_ == NdiVideoSourceChoice::AlphaTestPattern) {
+            int width = 0;
+            int height = 0;
+            int stride = 0;
+            alphaPattern_.setAlphaScale(patternAlphaScale_.load());
+            alphaPattern_.fillFrame(patternBuffer, width, height, stride, patternFrameIndex++);
+            int alphaMin = -1;
+            int alphaMax = -1;
+            sampleBufferAlphaRange(patternBuffer.data(), width, height, stride, alphaMin, alphaMax);
+            sentAlphaMin_.store(alphaMin);
+            sentAlphaMax_.store(alphaMax);
+            sender_->sendVideoBGRA(patternBuffer.data(), width, height, stride,
+                                   frameRateN_, frameRateD_);
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+            continue;
+        }
+
+        if (!capture_->captureFrame(frame, 33)) {
             continue;
         }
 
@@ -193,6 +322,49 @@ void MainWindow::runCaptureLoop() {
     }
 }
 
+void MainWindow::sampleBufferAlphaRange(const uint8_t* data, int width, int height, int stride,
+                                        int& alphaMin, int& alphaMax) {
+    alphaMin = 255;
+    alphaMax = 0;
+    if (!data || width <= 0 || height <= 0) {
+        alphaMin = -1;
+        alphaMax = -1;
+        return;
+    }
+    const int rowStride = stride > 0 ? stride : width * 4;
+    const int stepX = std::max(1, width / 64);
+    const int stepY = std::max(1, height / 64);
+    for (int y = 0; y < height; y += stepY) {
+        const uint8_t* row = data + static_cast<size_t>(y) * rowStride;
+        for (int x = 0; x < width; x += stepX) {
+            const uint8_t a = row[x * 4 + 3];
+            alphaMin = std::min(alphaMin, static_cast<int>(a));
+            alphaMax = std::max(alphaMax, static_cast<int>(a));
+        }
+    }
+}
+
 void MainWindow::updateStatus() {
-    // reserved for future stats
+    if (!running_.load()) {
+        return;
+    }
+
+    if (activeVideoSource_ == NdiVideoSourceChoice::AlphaTestPattern) {
+        const int alphaMin = sentAlphaMin_.load();
+        const int alphaMax = sentAlphaMax_.load();
+        QString alphaText = tr("发送 Alpha: -");
+        if (alphaMin >= 0 && alphaMax >= 0) {
+            alphaText = tr("发送 Alpha: %1~%2").arg(alphaMin).arg(alphaMax);
+        }
+        statusLabel_->setText(
+            tr("状态: Alpha 测试图推流中 (%1x%2)\n%3")
+                .arg(patternWidth_)
+                .arg(patternHeight_)
+                .arg(alphaText));
+        return;
+    }
+
+    statusLabel_->setText(tr("状态: 推流中 (%1x%2)")
+                              .arg(capture_->width())
+                              .arg(capture_->height()));
 }

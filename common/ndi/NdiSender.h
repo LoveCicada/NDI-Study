@@ -50,4 +50,6 @@ private:
     NDIlib_send_instance_t sender_ = nullptr;
     NdiSenderConfig config_;
     std::vector<float> audioBuffer_;
+    std::vector<uint8_t> videoSendBuffers_[2];
+    int videoSendBufferIndex_ = 0;
 };

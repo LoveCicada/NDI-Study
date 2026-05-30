@@ -1,38 +1,100 @@
 #include "VideoPreviewWidget.h"
 
-#include <QPaintEvent>
+#include <QImage>
 #include <QResizeEvent>
 #include <QShowEvent>
 #include <QTimer>
+
+#include <algorithm>
+#include <cstring>
 
 VideoPreviewWidget::VideoPreviewWidget(QWidget* parent)
     : QWidget(parent) {
     setAttribute(Qt::WA_PaintOnScreen);
     setAttribute(Qt::WA_NativeWindow);
+    setAttribute(Qt::WA_OpaquePaintEvent);
+    setAttribute(Qt::WA_NoSystemBackground);
+    setAutoFillBackground(false);
     setMinimumSize(640, 360);
 
     auto* timer = new QTimer(this);
-    connect(timer, &QTimer::timeout, this, [this]() {
-        if (hasPending_) {
-            drawPending();
-        }
-    });
-    timer->start(16);
+    connect(timer, &QTimer::timeout, this, &VideoPreviewWidget::onRenderTick);
+    timer->start(33);
 }
 
 VideoPreviewWidget::~VideoPreviewWidget() = default;
+
+void VideoPreviewWidget::markRenderDirty() {
+    renderDirty_.store(true);
+}
+
+void VideoPreviewWidget::setAlphaCheckerBackground(bool enabled) {
+    alphaCheckerBackground_ = enabled;
+    if (renderer_) {
+        renderer_->setAlphaCheckerBackground(enabled);
+    }
+    markRenderDirty();
+}
+
+void VideoPreviewWidget::setPreviewAlphaScale(float scale) {
+    previewAlphaScale_ = std::clamp(scale, 0.f, 1.f);
+    if (renderer_) {
+        renderer_->setPreviewAlphaScale(previewAlphaScale_);
+    }
+    markRenderDirty();
+}
+
+bool VideoPreviewWidget::hasBgraFrame() const {
+    std::lock_guard<std::mutex> lock(frameMutex_);
+    return hasFrame_ && displayFourCC_ == NDIlib_FourCC_type_BGRA && !displayFrame_.empty();
+}
+
+NDIlib_FourCC_video_type_e VideoPreviewWidget::lastFourCC() const {
+    std::lock_guard<std::mutex> lock(frameMutex_);
+    return displayFourCC_;
+}
+
+bool VideoPreviewWidget::saveCurrentFramePng(const QString& path) const {
+    std::vector<uint8_t> local;
+    int width = 0;
+    int height = 0;
+    int stride = 0;
+    {
+        std::lock_guard<std::mutex> lock(frameMutex_);
+        if (!hasFrame_ || displayFrame_.empty() || displayFourCC_ != NDIlib_FourCC_type_BGRA) {
+            return false;
+        }
+        local = displayFrame_;
+        width = displayWidth_;
+        height = displayHeight_;
+        stride = displayStride_;
+    }
+
+    if (stride <= 0) {
+        stride = width * 4;
+    }
+
+    QImage image(width, height, QImage::Format_ARGB32);
+    for (int y = 0; y < height; ++y) {
+        std::memcpy(image.scanLine(y), local.data() + static_cast<size_t>(y) * stride,
+                    static_cast<size_t>(width) * 4);
+    }
+    return image.save(path, "PNG");
+}
 
 void VideoPreviewWidget::ensureRenderer() {
     if (renderer_ || !internalWinId()) {
         return;
     }
     renderer_ = std::make_unique<Dx11VideoRenderer>();
+    renderer_->setAlphaCheckerBackground(alphaCheckerBackground_);
+    renderer_->setPreviewAlphaScale(previewAlphaScale_);
     renderer_->initialize(reinterpret_cast<void*>(winId()), width(), height());
 }
 
-void VideoPreviewWidget::submitFrame(const uint8_t* data, int width, int height, int stride,
+void VideoPreviewWidget::submitFrame(const uint8_t* frameData, int width, int height, int stride,
                                      NDIlib_FourCC_video_type_e fourCC) {
-    if (!data || width <= 0 || height <= 0) {
+    if (!frameData || width <= 0 || height <= 0) {
         return;
     }
     int rowStride = stride;
@@ -42,35 +104,59 @@ void VideoPreviewWidget::submitFrame(const uint8_t* data, int width, int height,
             : width * 2;
     }
     const size_t size = static_cast<size_t>(rowStride) * static_cast<size_t>(height);
-    std::lock_guard<std::mutex> lock(frameMutex_);
-    pending_.assign(data, data + size);
-    pendingWidth_ = width;
-    pendingHeight_ = height;
-    pendingStride_ = rowStride;
-    pendingFourCC_ = fourCC;
-    hasPending_ = true;
+    {
+        std::lock_guard<std::mutex> lock(frameMutex_);
+        if (displayFrame_.size() != size) {
+            displayFrame_.resize(size);
+        }
+        std::memcpy(displayFrame_.data(), frameData, size);
+        displayWidth_ = width;
+        displayHeight_ = height;
+        displayStride_ = rowStride;
+        displayFourCC_ = fourCC;
+        hasFrame_ = true;
+    }
+    frameUpdated_.store(true);
 }
 
-void VideoPreviewWidget::drawPending() {
+void VideoPreviewWidget::onRenderTick() {
+    const bool needRender = frameUpdated_.exchange(false) || renderDirty_.exchange(false);
+    if (!needRender) {
+        return;
+    }
+
     ensureRenderer();
     if (!renderer_) {
         return;
     }
 
     std::vector<uint8_t> local;
-    int w = 0, h = 0, stride = 0;
+    int w = 0;
+    int h = 0;
+    int stride = 0;
     NDIlib_FourCC_video_type_e fourCC = NDIlib_FourCC_type_UYVY;
+    bool hasFrame = false;
     {
         std::lock_guard<std::mutex> lock(frameMutex_);
-        if (!hasPending_) {
-            return;
+        hasFrame = hasFrame_;
+        if (hasFrame) {
+            local = displayFrame_;
+            w = displayWidth_;
+            h = displayHeight_;
+            stride = displayStride_;
+            fourCC = displayFourCC_;
         }
-        local.swap(pending_);
-        w = pendingWidth_;
-        h = pendingHeight_;
-        stride = pendingStride_;
-        fourCC = pendingFourCC_;
-        hasPending_ = false;
+    }
+
+    renderer_->setAlphaCheckerBackground(alphaCheckerBackground_);
+    renderer_->setPreviewAlphaScale(previewAlphaScale_);
+
+    if (!hasFrame) {
+        if (alphaCheckerBackground_) {
+            renderer_->renderCheckerboardOnly();
+            renderer_->present();
+        }
+        return;
     }
 
     renderer_->renderFrame(local.data(), w, h, stride, fourCC);
@@ -80,6 +166,7 @@ void VideoPreviewWidget::drawPending() {
 void VideoPreviewWidget::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
     ensureRenderer();
+    markRenderDirty();
 }
 
 void VideoPreviewWidget::resizeEvent(QResizeEvent* event) {
@@ -88,9 +175,5 @@ void VideoPreviewWidget::resizeEvent(QResizeEvent* event) {
     if (renderer_) {
         renderer_->resize(width(), height());
     }
-}
-
-void VideoPreviewWidget::paintEvent(QPaintEvent* event) {
-    Q_UNUSED(event);
-    drawPending();
+    markRenderDirty();
 }

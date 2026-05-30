@@ -18,8 +18,11 @@ public:
 
     bool initialize(void* windowHandle, int width, int height);
     void resize(int width, int height);
+    void setAlphaCheckerBackground(bool enabled);
+    void setPreviewAlphaScale(float scale);
     void renderFrame(const uint8_t* data, int width, int height, int stride,
                      NDIlib_FourCC_video_type_e fourCC);
+    void renderCheckerboardOnly();
     void present();
     void clear();
 
@@ -31,6 +34,10 @@ private:
     bool ensureTexture(int width, int height, DXGI_FORMAT format);
     void uploadUyvy(const uint8_t* data, int width, int height, int stride);
     void uploadBgra(const uint8_t* data, int width, int height, int stride);
+    void drawFullscreenQuad(ID3D11PixelShader* pixelShader);
+    void drawCheckerBackground();
+
+    std::vector<uint8_t> scaledBgraBuffer_;
 
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
@@ -41,13 +48,18 @@ private:
     Microsoft::WRL::ComPtr<ID3D11VertexShader> vs_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> psBgra_;
     Microsoft::WRL::ComPtr<ID3D11PixelShader> psUyvy_;
+    Microsoft::WRL::ComPtr<ID3D11PixelShader> psChecker_;
     Microsoft::WRL::ComPtr<ID3D11InputLayout> layout_;
     Microsoft::WRL::ComPtr<ID3D11Buffer> vb_;
     Microsoft::WRL::ComPtr<ID3D11SamplerState> sampler_;
+    Microsoft::WRL::ComPtr<ID3D11BlendState> alphaBlendState_;
+    Microsoft::WRL::ComPtr<ID3D11BlendState> opaqueBlendState_;
 
     int clientWidth_ = 0;
     int clientHeight_ = 0;
     int texWidth_ = 0;
     int texHeight_ = 0;
     DXGI_FORMAT texFormat_ = DXGI_FORMAT_B8G8R8A8_UNORM;
+    bool alphaCheckerBackground_ = false;
+    float previewAlphaScale_ = 1.f;
 };

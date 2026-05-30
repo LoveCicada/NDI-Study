@@ -4,6 +4,7 @@ add_library(ndi_study_common STATIC
     ndi/NdiSender.cpp
     ndi/NdiReceiver.cpp
     capture/DxgiScreenCapture.cpp
+    capture/AlphaTestPattern.cpp
     encode/MfH264Encoder.cpp
     render/Dx11VideoRenderer.cpp
     render/VideoPreviewWidget.cpp

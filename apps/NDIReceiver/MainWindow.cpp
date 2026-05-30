@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 
+#include <QFileDialog>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QMessageBox>
@@ -7,6 +8,32 @@
 #include <QVBoxLayout>
 
 #include <memory>
+#include <algorithm>
+
+namespace {
+
+void sampleAlphaRange(const NdiVideoFrameData& frame, int& alphaMin, int& alphaMax) {
+    alphaMin = 255;
+    alphaMax = 0;
+    if (frame.fourCC != NDIlib_FourCC_type_BGRA || frame.width <= 0 || frame.height <= 0) {
+        alphaMin = -1;
+        alphaMax = -1;
+        return;
+    }
+    const int stride = frame.stride > 0 ? frame.stride : frame.width * 4;
+    const int stepX = std::max(1, frame.width / 64);
+    const int stepY = std::max(1, frame.height / 64);
+    for (int y = 0; y < frame.height; y += stepY) {
+        const uint8_t* row = frame.buffer.data() + static_cast<size_t>(y) * stride;
+        for (int x = 0; x < frame.width; x += stepX) {
+            const uint8_t a = row[x * 4 + 3];
+            alphaMin = std::min(alphaMin, static_cast<int>(a));
+            alphaMax = std::max(alphaMax, static_cast<int>(a));
+        }
+    }
+}
+
+} // namespace
 
 MainWindow::MainWindow(NdiContext& ndiContext, QWidget* parent)
     : QMainWindow(parent)
@@ -35,7 +62,7 @@ void MainWindow::setupUi() {
 
     auto* controlPanel = new QWidget(central);
     auto* controlLayout = new QVBoxLayout(controlPanel);
-    controlPanel->setMaximumWidth(360);
+    controlPanel->setMaximumWidth(380);
 
     auto* connGroup = new QGroupBox(tr("连接"), controlPanel);
     auto* connLayout = new QFormLayout(connGroup);
@@ -62,6 +89,21 @@ void MainWindow::setupUi() {
     colorFormatCombo_->addItem(tr("Best (高质量)"), static_cast<int>(NdiRecvColorFormatChoice::Best));
     colorFormatCombo_->addItem("UYVY/BGRA", static_cast<int>(NdiRecvColorFormatChoice::UYVY_BGRA));
     colorFormatCombo_->addItem("BGRX/BGRA", static_cast<int>(NdiRecvColorFormatChoice::BGRX_BGRA));
+    alphaPresetBtn_ = new QPushButton(tr("Alpha 测试预设"), videoGroup);
+    alphaPresetBtn_->setToolTip(tr("选择 Fastest 色彩格式、关闭硬件解码，并启用透明检测背景"));
+    alphaCheckerCheck_ = new QCheckBox(tr("启用透明检测背景（棋盘格）"), videoGroup);
+    previewAlphaSlider_ = new QSlider(Qt::Horizontal, videoGroup);
+    previewAlphaSlider_->setRange(0, 100);
+    previewAlphaSlider_->setValue(100);
+    previewAlphaSlider_->setToolTip(tr("仅影响预览混合显示，不改变 NDI 原始帧；调低可验证棋盘格叠加是否正常"));
+    previewAlphaValueLabel_ = new QLabel(tr("100%"), videoGroup);
+    previewAlphaValueLabel_->setMinimumWidth(40);
+    auto* previewAlphaRow = new QWidget(videoGroup);
+    auto* previewAlphaLayout = new QHBoxLayout(previewAlphaRow);
+    previewAlphaLayout->setContentsMargins(0, 0, 0, 0);
+    previewAlphaLayout->addWidget(previewAlphaSlider_, 1);
+    previewAlphaLayout->addWidget(previewAlphaValueLabel_);
+    savePngBtn_ = new QPushButton(tr("保存当前帧 PNG..."), videoGroup);
     bandwidthCombo_ = new QComboBox(videoGroup);
     bandwidthCombo_->addItem(tr("最高带宽"), static_cast<int>(NDIlib_recv_bandwidth_highest));
     bandwidthCombo_->addItem(tr("较低带宽"), static_cast<int>(NDIlib_recv_bandwidth_lowest));
@@ -72,6 +114,10 @@ void MainWindow::setupUi() {
     hwDecodeCheck_->setChecked(true);
     videoLayout->addRow(enableVideoCheck_);
     videoLayout->addRow(tr("色彩格式"), colorFormatCombo_);
+    videoLayout->addRow(alphaPresetBtn_);
+    videoLayout->addRow(alphaCheckerCheck_);
+    videoLayout->addRow(tr("预览 Alpha 倍增"), previewAlphaRow);
+    videoLayout->addRow(savePngBtn_);
     videoLayout->addRow(tr("带宽"), bandwidthCombo_);
     videoLayout->addRow(allowFieldsCheck_);
     videoLayout->addRow(frameSyncCheck_);
@@ -112,6 +158,25 @@ void MainWindow::setupUi() {
     connect(disconnectBtn_, &QPushButton::clicked, this, &MainWindow::onDisconnect);
     connect(startBtn_, &QPushButton::clicked, this, &MainWindow::onStartReceive);
     connect(stopBtn_, &QPushButton::clicked, this, &MainWindow::onStopReceive);
+    connect(alphaPresetBtn_, &QPushButton::clicked, this, &MainWindow::onAlphaTestPreset);
+    connect(savePngBtn_, &QPushButton::clicked, this, &MainWindow::onSaveFramePng);
+    connect(alphaCheckerCheck_, &QCheckBox::toggled, this, &MainWindow::onAlphaCheckerToggled);
+    connect(previewAlphaSlider_, &QSlider::valueChanged, this, &MainWindow::onPreviewAlphaChanged);
+}
+
+QString MainWindow::fourCcToString(NDIlib_FourCC_video_type_e fourCC) {
+    switch (fourCC) {
+    case NDIlib_FourCC_type_BGRA:
+        return QStringLiteral("BGRA");
+    case NDIlib_FourCC_type_BGRX:
+        return QStringLiteral("BGRX");
+    case NDIlib_FourCC_type_UYVY:
+        return QStringLiteral("UYVY");
+    case NDIlib_FourCC_type_UYVA:
+        return QStringLiteral("UYVA");
+    default:
+        return QString("0x%1").arg(static_cast<uint32_t>(fourCC), 8, 16, QChar('0'));
+    }
 }
 
 NdiReceiverConfig MainWindow::buildConfig() const {
@@ -125,6 +190,51 @@ NdiReceiverConfig MainWindow::buildConfig() const {
     cfg.enableVideo = enableVideoCheck_->isChecked();
     cfg.enableAudio = enableAudioCheck_->isChecked();
     return cfg;
+}
+
+void MainWindow::onAlphaTestPreset() {
+    const int idx = colorFormatCombo_->findData(static_cast<int>(NdiRecvColorFormatChoice::Fastest));
+    if (idx >= 0) {
+        colorFormatCombo_->setCurrentIndex(idx);
+    }
+    hwDecodeCheck_->setChecked(false);
+    frameSyncCheck_->setChecked(false);
+    allowFieldsCheck_->setChecked(true);
+    alphaCheckerCheck_->setChecked(true);
+    previewAlphaSlider_->setValue(100);
+    previewAlphaValueLabel_->setText(tr("100%"));
+    preview_->setAlphaCheckerBackground(true);
+    preview_->setPreviewAlphaScale(1.f);
+}
+
+void MainWindow::onAlphaCheckerToggled(bool enabled) {
+    preview_->setAlphaCheckerBackground(enabled);
+}
+
+void MainWindow::onPreviewAlphaChanged(int value) {
+    previewAlphaValueLabel_->setText(tr("%1%").arg(value));
+    preview_->setPreviewAlphaScale(static_cast<float>(value) / 100.f);
+}
+
+void MainWindow::onSaveFramePng() {
+    if (!preview_->hasBgraFrame()) {
+        QMessageBox::warning(
+            this, tr("保存 PNG"),
+            tr("当前帧不可用。请使用 BGRX/BGRA 色彩格式接收带 Alpha 的源，并确保正在接收视频。"));
+        return;
+    }
+
+    const QString path = QFileDialog::getSaveFileName(
+        this, tr("保存当前帧"), QString(), tr("PNG 图像 (*.png)"));
+    if (path.isEmpty()) {
+        return;
+    }
+
+    if (!preview_->saveCurrentFramePng(path)) {
+        QMessageBox::critical(this, tr("保存 PNG"), tr("保存失败"));
+        return;
+    }
+    QMessageBox::information(this, tr("保存 PNG"), tr("已保存到:\n%1").arg(path));
 }
 
 void MainWindow::onRefreshSources() {
@@ -191,6 +301,8 @@ void MainWindow::onStartReceive() {
         return;
     }
     receiver_->connectToSource(sources_[static_cast<size_t>(idx)].source);
+    preview_->setAlphaCheckerBackground(alphaCheckerCheck_->isChecked());
+    preview_->setPreviewAlphaScale(static_cast<float>(previewAlphaSlider_->value()) / 100.f);
 
     if (enableAudioCheck_->isChecked()) {
         audioPlayer_->open(48000, 2);
@@ -214,11 +326,18 @@ void MainWindow::onVideoFrame(const NdiVideoFrameData& frame) {
     if (frame.buffer.empty()) {
         return;
     }
-    auto copy = std::make_shared<NdiVideoFrameData>(frame);
-    QMetaObject::invokeMethod(this, [this, copy]() {
-        preview_->submitFrame(copy->buffer.data(), copy->width, copy->height,
-                              copy->stride, copy->fourCC);
-    }, Qt::QueuedConnection);
+
+    lastFourCC_ = frame.fourCC;
+    if (++alphaSampleCounter_ % 15 == 0) {
+        int alphaMin = -1;
+        int alphaMax = -1;
+        sampleAlphaRange(frame, alphaMin, alphaMax);
+        lastAlphaMin_ = alphaMin;
+        lastAlphaMax_ = alphaMax;
+    }
+
+    preview_->submitFrame(frame.buffer.data(), frame.width, frame.height,
+                          frame.stride, frame.fourCC);
 }
 
 void MainWindow::onAudioFrame(const NdiAudioFrameData& frame) {
@@ -230,10 +349,16 @@ void MainWindow::onAudioFrame(const NdiAudioFrameData& frame) {
 
 void MainWindow::updateStats() {
     const auto s = receiver_->stats();
+    QString alphaText = tr("Alpha: -");
+    if (lastAlphaMin_ >= 0 && lastAlphaMax_ >= 0) {
+        alphaText = tr("Alpha: %1~%2").arg(lastAlphaMin_).arg(lastAlphaMax_);
+    }
     statsLabel_->setText(
-        tr("视频帧: %1  音频帧: %2\n丢视频: %3  丢音频: %4")
+        tr("视频帧: %1  音频帧: %2\n丢视频: %3  丢音频: %4\nFourCC: %5  %6")
             .arg(s.videoFrames)
             .arg(s.audioFrames)
             .arg(s.droppedVideo)
-            .arg(s.droppedAudio));
+            .arg(s.droppedAudio)
+            .arg(fourCcToString(lastFourCC_))
+            .arg(alphaText));
 }
