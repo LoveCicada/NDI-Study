@@ -1,7 +1,3 @@
-# Third-party SDKs (本地自行下载，不入库)
-third_party/*
-!third_party/README.md
-
 # Build
 build/
 build_env.bat
@@ -20,9 +16,11 @@ moc_*.cpp
 ui_*.h
 qrc_*.cpp
 
-# Runtime binaries
+# Runtime binaries (build 产物；third_party SDK 二进制保留入库)
 *.dll
+!third_party/**/*.dll
 *.exe
+!third_party/**/*.exe
 !build_env.bat.example
 
 # OS

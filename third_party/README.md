@@ -1,6 +1,6 @@
 # Third-Party SDK 放置说明
 
-将下载的 SDK 解压到本目录，**不要提交到 Git**。
+本目录 SDK 已纳入 Git 仓库，克隆后可直接构建；若需自行更新版本，请替换对应子目录并保持 CMake 期望的目录结构。
 
 ## NDI 6 Advanced SDK
 
