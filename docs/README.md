@@ -12,6 +12,7 @@
 | [04-开发计划与架构设计.md](04-开发计划与架构设计.md) | Demo 架构、API 参考、分阶段实施与联调流程 |
 | [05-联调验证指南.md](05-联调验证指南.md) | 与 NDI Tools 联调步骤与验收清单 |
 | [06-功能清单与变更记录.md](06-功能清单与变更记录.md) | Demo 功能清单、BUG 修复与版本变更记录 |
+| [07-NDIReceiver预览渲染与Alpha混合.md](07-NDIReceiver预览渲染与Alpha混合.md) | 棋盘格背景、DX11 Alpha 混合、RenderDoc 对照 |
 
 ## 工程说明
 
