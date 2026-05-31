@@ -1,5 +1,7 @@
 #include "NdiSender.h"
 
+#include "VideoFormatConvert.h"
+
 #include <Processing.NDI.Advanced.h>
 
 #include <cstring>
@@ -32,36 +34,39 @@ void NdiSender::destroy() {
     }
 }
 
-bool NdiSender::sendVideoBGRA(const uint8_t* data, int width, int height, int stride,
-                              int frameRateN, int frameRateD) {
-    if (!sender_ || !config_.enableVideo || !data) {
+bool NdiSender::sendVideo(const uint8_t* bgra, int width, int height, int bgraStride,
+                          int frameRateN, int frameRateD, NdiSendColorFormatChoice format) {
+    if (!sender_ || !config_.enableVideo || !bgra) {
         return false;
     }
 
-    const int rowStride = stride > 0 ? stride : width * 4;
-    const size_t size = static_cast<size_t>(rowStride) * static_cast<size_t>(height);
     videoSendBufferIndex_ = 1 - videoSendBufferIndex_;
     auto& owned = videoSendBuffers_[videoSendBufferIndex_];
-    owned.resize(size);
-    for (int y = 0; y < height; ++y) {
-        std::memcpy(owned.data() + static_cast<size_t>(y) * rowStride,
-                    data + static_cast<size_t>(y) * rowStride,
-                    static_cast<size_t>(width) * 4);
+    int outStride = 0;
+    NDIlib_FourCC_video_type_e fourCC = NDIlib_FourCC_type_BGRA;
+    if (!packBgraForSend(owned, outStride, fourCC, bgra, width, height, bgraStride, format)) {
+        return false;
     }
 
     NDIlib_video_frame_v2_t frame{};
     frame.xres = width;
     frame.yres = height;
-    frame.FourCC = NDIlib_FourCC_type_BGRA;
+    frame.FourCC = fourCC;
     frame.frame_rate_N = frameRateN;
     frame.frame_rate_D = frameRateD;
     frame.picture_aspect_ratio = static_cast<float>(width) / static_cast<float>(height);
     frame.frame_format_type = NDIlib_frame_format_type_progressive;
-    frame.line_stride_in_bytes = rowStride;
+    frame.line_stride_in_bytes = outStride;
     frame.p_data = owned.data();
 
     NDIlib_send_send_video_async_v2(sender_, &frame);
     return true;
+}
+
+bool NdiSender::sendVideoBGRA(const uint8_t* data, int width, int height, int stride,
+                              int frameRateN, int frameRateD) {
+    return sendVideo(data, width, height, stride, frameRateN, frameRateD,
+                     NdiSendColorFormatChoice::BGRA);
 }
 
 bool NdiSender::sendVideoH264(const uint8_t* data, size_t size, int width, int height,

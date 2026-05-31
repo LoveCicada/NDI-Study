@@ -59,6 +59,7 @@ private:
     QLineEdit* groupsEdit_ = nullptr;
     QComboBox* modeCombo_ = nullptr;
     QComboBox* videoSourceCombo_ = nullptr;
+    QComboBox* colorFormatCombo_ = nullptr;
     QComboBox* outputCombo_ = nullptr;
     QSpinBox* patternWidthSpin_ = nullptr;
     QSpinBox* patternHeightSpin_ = nullptr;

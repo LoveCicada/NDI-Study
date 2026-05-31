@@ -54,6 +54,15 @@ void MainWindow::setupUi() {
     videoSourceCombo_->addItem(tr("DXGI 屏幕采集"), static_cast<int>(NdiVideoSourceChoice::ScreenCapture));
     videoSourceCombo_->addItem(tr("Alpha 测试图"), static_cast<int>(NdiVideoSourceChoice::AlphaTestPattern));
 
+    colorFormatCombo_ = new QComboBox(captureGroup);
+    colorFormatCombo_->addItem(tr("BGRA（含 Alpha）"), static_cast<int>(NdiSendColorFormatChoice::BGRA));
+    colorFormatCombo_->addItem(tr("BGRX（无 Alpha）"), static_cast<int>(NdiSendColorFormatChoice::BGRX));
+    colorFormatCombo_->addItem(tr("UYVY（YUV 4:2:2）"), static_cast<int>(NdiSendColorFormatChoice::UYVY));
+    colorFormatCombo_->addItem(tr("UYVA（YUV + Alpha 平面）"), static_cast<int>(NdiSendColorFormatChoice::UYVA));
+    colorFormatCombo_->setToolTip(
+        tr("High Bandwidth 下提交给 NDI SDK 的 FourCC。\n"
+           "Alpha 测试推荐 UYVA + Receiver Fastest；BGRA 可能被 SDK 转为 UYVY/UYVA。"));
+
     outputCombo_ = new QComboBox(captureGroup);
     refreshOutputsBtn_ = new QPushButton(tr("刷新显示器"), captureGroup);
     screenCaptureRow_ = new QWidget(captureGroup);
@@ -108,6 +117,7 @@ void MainWindow::setupUi() {
     hxBitrateSpin_->setSingleStep(0.1);
     hxBitrateSpin_->setValue(1.0);
     captureLayout->addRow(tr("视频源"), videoSourceCombo_);
+    captureLayout->addRow(tr("发送色彩格式"), colorFormatCombo_);
     captureLayout->addRow(tr("屏幕"), screenCaptureRow_);
     captureLayout->addRow(tr("测试图尺寸"), patternSizeRow_);
     captureLayout->addRow(tr("测试图 Alpha"), patternAlphaRow_);
@@ -134,6 +144,8 @@ void MainWindow::setupUi() {
     connect(refreshOutputsBtn_, &QPushButton::clicked, this, &MainWindow::onRefreshOutputs);
     connect(videoSourceCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MainWindow::onVideoSourceChanged);
+    connect(modeCombo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MainWindow::updateCaptureControls);
     connect(patternAlphaSlider_, &QSlider::valueChanged, this, [this](int value) {
         patternAlphaValueLabel_->setText(tr("%1%").arg(value));
         patternAlphaScale_.store(static_cast<float>(value) / 100.f);
@@ -153,6 +165,9 @@ void MainWindow::onVideoSourceChanged() {
 void MainWindow::updateCaptureControls() {
     const auto source = static_cast<NdiVideoSourceChoice>(videoSourceCombo_->currentData().toInt());
     const bool pattern = source == NdiVideoSourceChoice::AlphaTestPattern;
+    const bool hxMode = static_cast<NdiSendMode>(modeCombo_->currentData().toInt()) == NdiSendMode::HxH264;
+    const bool streaming = running_.load();
+
     screenCaptureRow_->setVisible(!pattern);
     patternSizeRow_->setVisible(pattern);
     patternAlphaRow_->setVisible(pattern);
@@ -163,9 +178,26 @@ void MainWindow::updateCaptureControls() {
         enableAudioCheck_->setChecked(false);
         enableAudioCheck_->setEnabled(false);
         clockVideoCheck_->setChecked(false);
+        if (!streaming) {
+            const int uyvaIdx = colorFormatCombo_->findData(
+                static_cast<int>(NdiSendColorFormatChoice::UYVA));
+            if (uyvaIdx >= 0) {
+                colorFormatCombo_->setCurrentIndex(uyvaIdx);
+            }
+        }
     } else {
-        modeCombo_->setEnabled(true);
-        enableAudioCheck_->setEnabled(true);
+        modeCombo_->setEnabled(!streaming);
+        enableAudioCheck_->setEnabled(!streaming);
+    }
+
+    const bool colorFormatEnabled = !streaming && !hxMode;
+    colorFormatCombo_->setEnabled(colorFormatEnabled);
+    if (hxMode) {
+        colorFormatCombo_->setToolTip(tr("HX H.264 为压缩 Annex-B 流，不提供色彩格式选项。"));
+    } else {
+        colorFormatCombo_->setToolTip(
+            tr("High Bandwidth 下提交给 NDI SDK 的 FourCC。\n"
+               "Alpha 测试推荐 UYVA + Receiver Fastest；BGRA 可能被 SDK 转为 UYVY/UYVA。"));
     }
 }
 
@@ -179,6 +211,7 @@ NdiSenderConfig MainWindow::buildConfig() const {
     cfg.clockVideo = clockVideoCheck_->isChecked();
     cfg.clockAudio = clockAudioCheck_->isChecked();
     cfg.hxBitrateMultiplier = static_cast<float>(hxBitrateSpin_->value());
+    cfg.colorFormat = static_cast<NdiSendColorFormatChoice>(colorFormatCombo_->currentData().toInt());
     return cfg;
 }
 
@@ -252,15 +285,23 @@ void MainWindow::onStart() {
     running_.store(true);
     captureThread_ = std::thread(&MainWindow::runCaptureLoop, this);
     statusTimer_->start(500);
+    updateCaptureControls();
 
+    const QString fourCc = QString::fromStdString(sendColorFormatName(activeConfig_.colorFormat));
     if (activeVideoSource_ == NdiVideoSourceChoice::AlphaTestPattern) {
-        statusLabel_->setText(tr("状态: Alpha 测试图推流中 (%1x%2)")
+        statusLabel_->setText(tr("状态: Alpha 测试图推流中 (%1x%2)\n发送 FourCC: %3")
                                   .arg(patternWidth_)
-                                  .arg(patternHeight_));
-    } else {
-        statusLabel_->setText(tr("状态: 推流中 (%1x%2)")
+                                  .arg(patternHeight_)
+                                  .arg(fourCc));
+    } else if (activeConfig_.mode == NdiSendMode::HxH264) {
+        statusLabel_->setText(tr("状态: HX 推流中 (%1x%2)")
                                   .arg(capture_->width())
                                   .arg(capture_->height()));
+    } else {
+        statusLabel_->setText(tr("状态: 推流中 (%1x%2)\n发送 FourCC: %3")
+                                  .arg(capture_->width())
+                                  .arg(capture_->height())
+                                  .arg(fourCc));
     }
 }
 
@@ -277,6 +318,7 @@ void MainWindow::onStop() {
     sender_->flushVideoAsync();
     sender_->destroy();
     capture_->close();
+    updateCaptureControls();
     statusLabel_->setText(tr("状态: 已停止"));
 }
 
@@ -303,8 +345,8 @@ void MainWindow::runCaptureLoop() {
             sampleBufferAlphaRange(patternBuffer.data(), width, height, stride, alphaMin, alphaMax);
             sentAlphaMin_.store(alphaMin);
             sentAlphaMax_.store(alphaMax);
-            sender_->sendVideoBGRA(patternBuffer.data(), width, height, stride,
-                                   frameRateN_, frameRateD_);
+            sender_->sendVideo(patternBuffer.data(), width, height, stride,
+                               frameRateN_, frameRateD_, cfg.colorFormat);
             std::this_thread::sleep_for(std::chrono::milliseconds(16));
             continue;
         }
@@ -316,8 +358,8 @@ void MainWindow::runCaptureLoop() {
         if (cfg.mode == NdiSendMode::HxH264 && encoder_->isOpen()) {
             encoder_->encodeBGRA(frame.bgra.data(), frame.stride, 0);
         } else {
-            sender_->sendVideoBGRA(frame.bgra.data(), frame.width, frame.height, frame.stride,
-                                   frameRateN_, frameRateD_);
+            sender_->sendVideo(frame.bgra.data(), frame.width, frame.height, frame.stride,
+                               frameRateN_, frameRateD_, cfg.colorFormat);
         }
     }
 }
@@ -356,15 +398,28 @@ void MainWindow::updateStatus() {
         if (alphaMin >= 0 && alphaMax >= 0) {
             alphaText = tr("发送 Alpha: %1~%2").arg(alphaMin).arg(alphaMax);
         }
+        const QString fourCc = QString::fromStdString(
+            sendColorFormatName(activeConfig_.colorFormat));
         statusLabel_->setText(
-            tr("状态: Alpha 测试图推流中 (%1x%2)\n%3")
+            tr("状态: Alpha 测试图推流中 (%1x%2)\n发送 FourCC: %3\n%4")
                 .arg(patternWidth_)
                 .arg(patternHeight_)
+                .arg(fourCc)
                 .arg(alphaText));
         return;
     }
 
-    statusLabel_->setText(tr("状态: 推流中 (%1x%2)")
+    if (activeConfig_.mode != NdiSendMode::HxH264) {
+        const QString fourCc = QString::fromStdString(
+            sendColorFormatName(activeConfig_.colorFormat));
+        statusLabel_->setText(tr("状态: 推流中 (%1x%2)\n发送 FourCC: %3")
+                                  .arg(capture_->width())
+                                  .arg(capture_->height())
+                                  .arg(fourCc));
+        return;
+    }
+
+    statusLabel_->setText(tr("状态: HX 推流中 (%1x%2)")
                               .arg(capture_->width())
                               .arg(capture_->height()));
 }

@@ -1,5 +1,7 @@
 #include "NdiReceiver.h"
 
+#include "VideoFormatConvert.h"
+
 #include <chrono>
 #include <cstring>
 #include <algorithm>
@@ -15,8 +17,7 @@ std::vector<uint8_t> copyVideoBuffer(const NDIlib_video_frame_v2_t& frame) {
         const int uyvyStride = frame.line_stride_in_bytes > 0
             ? frame.line_stride_in_bytes
             : frame.xres * 2;
-        const size_t size = static_cast<size_t>(uyvyStride) * static_cast<size_t>(frame.yres)
-            + static_cast<size_t>(uyvyStride / 2) * static_cast<size_t>(frame.yres);
+        const size_t size = uyvaBufferSize(frame.xres, frame.yres, uyvyStride);
         std::vector<uint8_t> out(size);
         std::memcpy(out.data(), frame.p_data, size);
         return out;
@@ -33,15 +34,6 @@ std::vector<uint8_t> copyVideoBuffer(const NDIlib_video_frame_v2_t& frame) {
     return out;
 }
 
-void uyvyToRgb(uint8_t y, uint8_t u, uint8_t v, uint8_t& r, uint8_t& g, uint8_t& b) {
-    const float Y = y / 255.f;
-    const float U = u / 255.f - 0.5f;
-    const float V = v / 255.f - 0.5f;
-    r = static_cast<uint8_t>(std::min(255.f, (Y + 1.402f * V) * 255.f));
-    g = static_cast<uint8_t>(std::min(255.f, (Y - 0.344136f * U - 0.714136f * V) * 255.f));
-    b = static_cast<uint8_t>(std::min(255.f, (Y + 1.772f * U) * 255.f));
-}
-
 NdiVideoFrameData convertUyvaToBgra(const NDIlib_video_frame_v2_t& frame) {
     NdiVideoFrameData data;
     data.width = frame.xres;
@@ -51,41 +43,10 @@ NdiVideoFrameData convertUyvaToBgra(const NDIlib_video_frame_v2_t& frame) {
     data.frameRateN = frame.frame_rate_N;
     data.frameRateD = frame.frame_rate_D;
 
-    const int width = frame.xres;
-    const int height = frame.yres;
-    const int uyvyStride = frame.line_stride_in_bytes > 0 ? frame.line_stride_in_bytes : width * 2;
-    const uint8_t* uyvy = frame.p_data;
-    const uint8_t* alphaPlane = frame.p_data + static_cast<size_t>(uyvyStride) * static_cast<size_t>(height);
-
-    data.buffer.assign(static_cast<size_t>(data.stride) * static_cast<size_t>(height), 0);
-    for (int y = 0; y < height; ++y) {
-        const uint8_t* uyvyRow = uyvy + static_cast<size_t>(y) * uyvyStride;
-        const uint8_t* alphaRow = alphaPlane + static_cast<size_t>(y) * width;
-        uint8_t* dstRow = data.buffer.data() + static_cast<size_t>(y) * data.stride;
-        for (int x = 0; x < width; x += 2) {
-            const uint8_t u = uyvyRow[0];
-            const uint8_t y0 = uyvyRow[1];
-            const uint8_t v = uyvyRow[2];
-            const uint8_t y1 = uyvyRow[3];
-            uyvyRow += 4;
-
-            uint8_t r = 0;
-            uint8_t g = 0;
-            uint8_t b = 0;
-            uyvyToRgb(y0, u, v, r, g, b);
-            dstRow[x * 4 + 0] = b;
-            dstRow[x * 4 + 1] = g;
-            dstRow[x * 4 + 2] = r;
-            dstRow[x * 4 + 3] = alphaRow[x];
-
-            if (x + 1 < width) {
-                uyvyToRgb(y1, u, v, r, g, b);
-                dstRow[(x + 1) * 4 + 0] = b;
-                dstRow[(x + 1) * 4 + 1] = g;
-                dstRow[(x + 1) * 4 + 2] = r;
-                dstRow[(x + 1) * 4 + 3] = alphaRow[x + 1];
-            }
-        }
+    const int uyvyStride = frame.line_stride_in_bytes > 0 ? frame.line_stride_in_bytes : frame.xres * 2;
+    if (!convertUyvaFrameToBgra(data.buffer, data.stride, frame.xres, frame.yres, uyvyStride,
+                                frame.p_data)) {
+        data.buffer.clear();
     }
     return data;
 }
