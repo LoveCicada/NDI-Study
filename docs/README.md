@@ -13,6 +13,7 @@
 | [05-联调验证指南.md](05-联调验证指南.md) | 与 NDI Tools 联调步骤与验收清单 |
 | [06-功能清单与变更记录.md](06-功能清单与变更记录.md) | Demo 功能清单、BUG 修复与版本变更记录 |
 | [07-NDIReceiver预览渲染与Alpha混合.md](07-NDIReceiver预览渲染与Alpha混合.md) | 棋盘格背景、DX11 Alpha 混合、RenderDoc 对照 |
+| [08-软件整体架构与UML设计.md](08-软件整体架构与UML设计.md) | 整体架构、运行流程图、时序图、各模块 UML 类图 |
 
 ## 工程说明
 

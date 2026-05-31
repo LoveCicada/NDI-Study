@@ -66,3 +66,4 @@ Screen Capture HX ↔ NDISender HX  （对比 HX）
 - [环境搭建](docs/02-开发环境搭建与下载清单.md)
 - [官方工具指南](docs/03-NDI官方工具使用指南.md)
 - [架构设计](docs/04-开发计划与架构设计.md)
+- [整体架构与 UML](docs/08-软件整体架构与UML设计.md)（流程图 / 时序图 / 类图）
