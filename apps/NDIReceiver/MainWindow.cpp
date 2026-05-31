@@ -373,10 +373,7 @@ void MainWindow::onStartReceive() {
     receiver_->connectToSource(sources_[static_cast<size_t>(idx)].source);
     preview_->setAlphaCheckerBackground(alphaCheckerCheck_->isChecked());
     preview_->setPreviewAlphaScale(static_cast<float>(previewAlphaSlider_->value()) / 100.f);
-
-    if (enableAudioCheck_->isChecked()) {
-        audioPlayer_->open(48000, 2);
-    }
+    audioPlayer_->close();
 
     receiver_->start(
         [this](const NdiVideoFrameData& frame) { onVideoFrame(frame); },
@@ -411,10 +408,16 @@ void MainWindow::onVideoFrame(const NdiVideoFrameData& frame) {
 }
 
 void MainWindow::onAudioFrame(const NdiAudioFrameData& frame) {
-    if (frame.samples.empty()) {
+    if (frame.samples.empty() || !enableAudioCheck_->isChecked()) {
         return;
     }
-    audioPlayer_->queue(frame.samples.data(), frame.sampleRate, frame.channels, frame.sampleCount);
+
+    const int sampleRate = frame.sampleRate > 0 ? frame.sampleRate : 48000;
+    const int channels = std::min(2, std::max(1, frame.channels));
+    if (!audioPlayer_->ensureOpen(sampleRate, channels)) {
+        return;
+    }
+    audioPlayer_->queue(frame.samples.data(), sampleRate, frame.channels, frame.sampleCount);
 }
 
 void MainWindow::updateStats() {

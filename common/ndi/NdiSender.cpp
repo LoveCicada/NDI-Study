@@ -92,12 +92,20 @@ bool NdiSender::sendVideoH264(const uint8_t* data, size_t size, int width, int h
 }
 
 bool NdiSender::sendAudio(const float* interleaved, int sampleRate, int channels, int samples) {
-    if (!sender_ || !config_.enableAudio || !interleaved || samples <= 0) {
+    if (!sender_ || !config_.enableAudio || !interleaved || samples <= 0 || channels <= 0) {
         return false;
     }
 
-    const size_t total = static_cast<size_t>(samples) * static_cast<size_t>(channels);
-    audioBuffer_.assign(interleaved, interleaved + total);
+    const int channelStrideBytes = static_cast<int>(sizeof(float) * static_cast<size_t>(samples));
+    audioBuffer_.resize(static_cast<size_t>(channelStrideBytes) * static_cast<size_t>(channels));
+
+    float* planar = reinterpret_cast<float*>(audioBuffer_.data());
+    for (int ch = 0; ch < channels; ++ch) {
+        float* dst = planar + static_cast<size_t>(ch) * static_cast<size_t>(samples);
+        for (int i = 0; i < samples; ++i) {
+            dst[i] = interleaved[static_cast<size_t>(i) * static_cast<size_t>(channels) + ch];
+        }
+    }
 
     NDIlib_audio_frame_v3_t frame{};
     frame.sample_rate = sampleRate;
@@ -105,7 +113,7 @@ bool NdiSender::sendAudio(const float* interleaved, int sampleRate, int channels
     frame.no_samples = samples;
     frame.FourCC = NDIlib_FourCC_audio_type_FLTP;
     frame.p_data = reinterpret_cast<uint8_t*>(audioBuffer_.data());
-    frame.channel_stride_in_bytes = static_cast<int>(sizeof(float) * static_cast<size_t>(samples));
+    frame.channel_stride_in_bytes = channelStrideBytes;
 
     NDIlib_send_send_audio_v3(sender_, &frame);
     return true;

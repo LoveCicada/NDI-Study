@@ -7,6 +7,31 @@
 #include <algorithm>
 #include <cstring>
 
+namespace {
+
+void downmixToChannels(const float* interleaved, int inChannels, int frames, int outChannels,
+                       std::vector<float>& out) {
+    out.resize(static_cast<size_t>(frames) * static_cast<size_t>(outChannels));
+    if (inChannels <= 1) {
+        for (int i = 0; i < frames; ++i) {
+            const float sample = interleaved[static_cast<size_t>(i) * std::max(1, inChannels)];
+            for (int ch = 0; ch < outChannels; ++ch) {
+                out[static_cast<size_t>(i) * outChannels + ch] = sample;
+            }
+        }
+        return;
+    }
+
+    for (int i = 0; i < frames; ++i) {
+        const float* frame = interleaved + static_cast<size_t>(i) * static_cast<size_t>(inChannels);
+        for (int ch = 0; ch < outChannels; ++ch) {
+            out[static_cast<size_t>(i) * outChannels + ch] = frame[std::min(ch, inChannels - 1)];
+        }
+    }
+}
+
+} // namespace
+
 SdlAudioPlayer::SdlAudioPlayer() = default;
 
 SdlAudioPlayer::~SdlAudioPlayer() {
@@ -57,6 +82,13 @@ bool SdlAudioPlayer::open(int sampleRate, int channels) {
 #endif
 }
 
+bool SdlAudioPlayer::ensureOpen(int sampleRate, int channels) {
+    if (open_ && sampleRate_ == sampleRate && channels_ == channels) {
+        return true;
+    }
+    return open(sampleRate, channels);
+}
+
 void SdlAudioPlayer::close() {
 #ifdef NDI_STUDY_HAS_SDL2
     if (open_) {
@@ -69,17 +101,35 @@ void SdlAudioPlayer::close() {
     pending_.clear();
 }
 
+void SdlAudioPlayer::clearPending() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_.clear();
+}
+
 void SdlAudioPlayer::queue(const float* interleaved, int sampleRate, int channels, int frames) {
-    if (!open_ || !interleaved || frames <= 0) {
+    if (!open_ || !interleaved || frames <= 0 || channels <= 0) {
         return;
     }
     (void)sampleRate;
-    (void)channels;
-    std::lock_guard<std::mutex> lock(mutex_);
-    const size_t count = static_cast<size_t>(frames) * static_cast<size_t>(channels_);
-    pending_.insert(pending_.end(), interleaved, interleaved + count);
-    if (pending_.size() > static_cast<size_t>(sampleRate_ * channels_ * 2)) {
-        pending_.erase(pending_.begin(),
-                       pending_.begin() + static_cast<std::ptrdiff_t>(pending_.size() / 2));
+
+    std::vector<float> normalized;
+    const float* src = interleaved;
+    int srcChannels = channels;
+    if (channels != channels_) {
+        downmixToChannels(interleaved, channels, frames, channels_, normalized);
+        src = normalized.data();
+        srcChannels = channels_;
     }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    const size_t count = static_cast<size_t>(frames) * static_cast<size_t>(srcChannels);
+    const size_t maxQueue = static_cast<size_t>(sampleRate_ * channels_) / 2;
+    if (pending_.size() + count > maxQueue) {
+        const size_t target = maxQueue > count ? maxQueue - count : 0;
+        if (pending_.size() > target) {
+            pending_.erase(pending_.begin(),
+                           pending_.begin() + static_cast<std::ptrdiff_t>(pending_.size() - target));
+        }
+    }
+    pending_.insert(pending_.end(), src, src + count);
 }

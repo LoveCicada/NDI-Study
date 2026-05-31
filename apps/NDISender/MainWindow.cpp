@@ -277,9 +277,17 @@ void MainWindow::onStart() {
     }
 
     if (cfg.enableAudio && activeVideoSource_ == NdiVideoSourceChoice::ScreenCapture) {
-        audioCapture_->start([this](const float* audioData, int sampleRate, int channels, int frames) {
-            sender_->sendAudio(audioData, sampleRate, channels, frames);
-        });
+        audioCapture_->setExcludeProcessNames({L"NDIReceiver.exe"});
+        if (!audioCapture_->start([this](const float* audioData, int sampleRate, int channels, int frames) {
+                sender_->sendAudio(audioData, sampleRate, channels, frames);
+            })) {
+            QMessageBox::warning(this, tr("音频"),
+                                 tr("WASAPI Loopback 音频采集启动失败，将仅推流视频。"));
+        } else if (!audioCapture_->usedProcessExclude()) {
+            QMessageBox::information(this, tr("音频"),
+                                     tr("未能排除 NDIReceiver 进程，同机推拉流时可能产生音频回授。"
+                                        "建议关闭 Receiver 本地播放，或使用 Windows 10 2004+ 同机测试。"));
+        }
     }
 
     running_.store(true);

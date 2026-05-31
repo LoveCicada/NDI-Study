@@ -264,6 +264,19 @@ void NdiReceiver::recvLoop() {
         case NDIlib_frame_type_video:
             processVideoFrame(video);
             NDIlib_recv_free_video_v2(receiver_, &video);
+            if (config_.enableAudio && audioCallback_) {
+                constexpr int kMaxAudioDrainPerVideo = 8;
+                for (int drain = 0; drain < kMaxAudioDrainPerVideo; ++drain) {
+                    NDIlib_audio_frame_v3_t pendingAudio{};
+                    const auto pendingType = NDIlib_recv_capture_v3(
+                        receiver_, nullptr, &pendingAudio, nullptr, 0);
+                    if (pendingType != NDIlib_frame_type_audio) {
+                        break;
+                    }
+                    processAudioFrame(pendingAudio);
+                    NDIlib_recv_free_audio_v3(receiver_, &pendingAudio);
+                }
+            }
             break;
         case NDIlib_frame_type_audio:
             processAudioFrame(audio);

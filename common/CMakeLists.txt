@@ -36,6 +36,7 @@ target_link_libraries(ndi_study_common
         mfreadwrite
         wmcodecdspuuid
         ole32
+        mmdevapi
 )
 
 if(NDI_STUDY_HAS_SDL2)
