@@ -7,6 +7,7 @@ add_library(ndi_study_common STATIC
     capture/AlphaTestPattern.cpp
     capture/VideoFormatConvert.cpp
     encode/MfH264Encoder.cpp
+    encode/GpuBgraToNv12.cpp
     render/Dx11VideoRenderer.cpp
     render/VideoPreviewWidget.cpp
     audio/WasapiLoopbackCapture.cpp

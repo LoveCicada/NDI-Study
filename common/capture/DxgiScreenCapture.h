@@ -21,6 +21,12 @@ struct CapturedFrame {
     int stride = 0;
 };
 
+struct CapturedGpuFrame {
+    ID3D11Texture2D* texture = nullptr;
+    int width = 0;
+    int height = 0;
+};
+
 class DxgiScreenCapture {
 public:
     DxgiScreenCapture();
@@ -37,17 +43,25 @@ public:
 
     bool captureFrame(CapturedFrame& out, uint32_t timeoutMs = 100);
 
+    // GPU-only capture: copies duplication texture to an internal pool; no CPU readback.
+    bool captureGpuFrame(CapturedGpuFrame& out, uint32_t timeoutMs = 100);
+
+    ID3D11Device* device() const { return device_.Get(); }
+    ID3D11DeviceContext* context() const { return context_.Get(); }
+
     int width() const { return width_; }
     int height() const { return height_; }
 
 private:
     bool initDuplication(int outputIndex);
     void recreateStagingTexture();
+    void recreateGpuPoolTexture();
 
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
     Microsoft::WRL::ComPtr<IDXGIOutputDuplication> duplication_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> staging_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> gpuPool_;
 
     int width_ = 0;
     int height_ = 0;

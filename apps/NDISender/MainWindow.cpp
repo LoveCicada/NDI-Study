@@ -270,7 +270,8 @@ void MainWindow::onStart() {
                                    capture_->width(), capture_->height(),
                                    frameRateN_, frameRateD_, frame.timestamp100ns);
         });
-        if (!encoder_->open(capture_->width(), capture_->height(), frameRateN_, frameRateD_, bitrate)) {
+        if (!encoder_->open(capture_->width(), capture_->height(), frameRateN_, frameRateD_, bitrate,
+                            capture_->device())) {
             QMessageBox::warning(this, tr("HX 编码"),
                                  tr("Media Foundation H.264 编码器初始化失败，请检查系统编码器"));
         }
@@ -302,9 +303,11 @@ void MainWindow::onStart() {
                                   .arg(patternHeight_)
                                   .arg(fourCc));
     } else if (activeConfig_.mode == NdiSendMode::HxH264) {
-        statusLabel_->setText(tr("状态: HX 推流中 (%1x%2)")
+        const QString gpuTag = encoder_->usesGpuPath() ? tr("GPU") : tr("CPU");
+        statusLabel_->setText(tr("状态: HX 推流中 (%1x%2, %3 编码)")
                                   .arg(capture_->width())
-                                  .arg(capture_->height()));
+                                  .arg(capture_->height())
+                                  .arg(gpuTag));
     } else {
         statusLabel_->setText(tr("状态: 推流中 (%1x%2)\n发送 FourCC: %3")
                                   .arg(capture_->width())
@@ -332,6 +335,7 @@ void MainWindow::onStop() {
 
 void MainWindow::runCaptureLoop() {
     CapturedFrame frame;
+    CapturedGpuFrame gpuFrame;
     std::vector<uint8_t> patternBuffer;
     uint64_t patternFrameIndex = 0;
 
@@ -359,13 +363,22 @@ void MainWindow::runCaptureLoop() {
             continue;
         }
 
-        if (!capture_->captureFrame(frame, 33)) {
-            continue;
-        }
-
         if (cfg.mode == NdiSendMode::HxH264 && encoder_->isOpen()) {
-            encoder_->encodeBGRA(frame.bgra.data(), frame.stride, 0);
+            if (encoder_->usesGpuPath()) {
+                if (!capture_->captureGpuFrame(gpuFrame, 33)) {
+                    continue;
+                }
+                encoder_->encodeGpuBgraTexture(gpuFrame.texture, 0);
+            } else {
+                if (!capture_->captureFrame(frame, 33)) {
+                    continue;
+                }
+                encoder_->encodeBGRA(frame.bgra.data(), frame.stride, 0);
+            }
         } else {
+            if (!capture_->captureFrame(frame, 33)) {
+                continue;
+            }
             sender_->sendVideo(frame.bgra.data(), frame.width, frame.height, frame.stride,
                                frameRateN_, frameRateD_, cfg.colorFormat);
         }
@@ -427,7 +440,8 @@ void MainWindow::updateStatus() {
         return;
     }
 
-    statusLabel_->setText(tr("状态: HX 推流中 (%1x%2)")
+    statusLabel_->setText(tr("状态: HX 推流中 (%1x%2, %3 编码)")
                               .arg(capture_->width())
-                              .arg(capture_->height()));
+                              .arg(capture_->height())
+                              .arg(encoder_->usesGpuPath() ? tr("GPU") : tr("CPU")));
 }

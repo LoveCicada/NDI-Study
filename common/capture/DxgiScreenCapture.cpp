@@ -53,6 +53,7 @@ bool DxgiScreenCapture::open(int outputIndex) {
 }
 
 void DxgiScreenCapture::close() {
+    gpuPool_.Reset();
     staging_.Reset();
     duplication_.Reset();
     context_.Reset();
@@ -92,8 +93,9 @@ bool DxgiScreenCapture::initDuplication(int outputIndex) {
 
     D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0};
     D3D_FEATURE_LEVEL level{};
+    const UINT deviceFlags = D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
     if (FAILED(D3D11CreateDevice(
-            adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, 0, levels, 1,
+            adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr, deviceFlags, levels, 1,
             D3D11_SDK_VERSION, device_.GetAddressOf(), &level, context_.GetAddressOf()))) {
         return false;
     }
@@ -111,8 +113,27 @@ bool DxgiScreenCapture::initDuplication(int outputIndex) {
     duplication_->GetDesc(&dupDesc);
     width_ = static_cast<int>(dupDesc.ModeDesc.Width);
     height_ = static_cast<int>(dupDesc.ModeDesc.Height);
-    recreateStagingTexture();
-    return staging_ != nullptr;
+    recreateGpuPoolTexture();
+    return gpuPool_ != nullptr;
+}
+
+void DxgiScreenCapture::recreateGpuPoolTexture() {
+    gpuPool_.Reset();
+    if (!device_ || width_ <= 0 || height_ <= 0) {
+        return;
+    }
+
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = static_cast<UINT>(width_);
+    desc.Height = static_cast<UINT>(height_);
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+
+    device_->CreateTexture2D(&desc, nullptr, gpuPool_.GetAddressOf());
 }
 
 void DxgiScreenCapture::recreateStagingTexture() {
@@ -135,7 +156,14 @@ void DxgiScreenCapture::recreateStagingTexture() {
 }
 
 bool DxgiScreenCapture::captureFrame(CapturedFrame& out, uint32_t timeoutMs) {
-    if (!duplication_ || !staging_ || !context_) {
+    if (!duplication_ || !context_) {
+        return false;
+    }
+
+    if (!staging_) {
+        recreateStagingTexture();
+    }
+    if (!staging_) {
         return false;
     }
 
@@ -179,5 +207,39 @@ bool DxgiScreenCapture::captureFrame(CapturedFrame& out, uint32_t timeoutMs) {
 
     context_->Unmap(staging_.Get(), 0);
     duplication_->ReleaseFrame();
+    return true;
+}
+
+bool DxgiScreenCapture::captureGpuFrame(CapturedGpuFrame& out, uint32_t timeoutMs) {
+    if (!duplication_ || !gpuPool_ || !context_) {
+        return false;
+    }
+
+    ComPtr<IDXGIResource> resource;
+    DXGI_OUTDUPL_FRAME_INFO frameInfo{};
+    const HRESULT hr = duplication_->AcquireNextFrame(timeoutMs, &frameInfo, resource.GetAddressOf());
+    if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+        return false;
+    }
+    if (FAILED(hr)) {
+        if (hr == DXGI_ERROR_ACCESS_LOST) {
+            close();
+            initDuplication(outputIndex_);
+        }
+        return false;
+    }
+
+    ComPtr<ID3D11Texture2D> texture;
+    if (FAILED(resource.As(&texture))) {
+        duplication_->ReleaseFrame();
+        return false;
+    }
+
+    context_->CopyResource(gpuPool_.Get(), texture.Get());
+    duplication_->ReleaseFrame();
+
+    out.texture = gpuPool_.Get();
+    out.width = width_;
+    out.height = height_;
     return true;
 }
