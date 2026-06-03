@@ -18,6 +18,7 @@
 #include <QSpinBox>
 #include <QTimer>
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <thread>
 
@@ -39,6 +40,7 @@ private slots:
     void onStart();
     void onStop();
     void updateStatus();
+    void onEncoderInitFailed();
 
 private:
     static void sampleBufferAlphaRange(const uint8_t* data, int width, int height, int stride,
@@ -85,9 +87,12 @@ private:
     std::atomic<float> patternAlphaScale_{1.f};
     std::atomic<int> sentAlphaMin_{-1};
     std::atomic<int> sentAlphaMax_{-1};
+    std::atomic<bool> encoderInitFailed_{false};
     QTimer* statusTimer_ = nullptr;
     NdiSenderConfig activeConfig_;
     NdiVideoSourceChoice activeVideoSource_ = NdiVideoSourceChoice::ScreenCapture;
+    bool hxEncoderRequested_ = false;
+    uint32_t pendingHxBitrate_ = 0;
     int patternWidth_ = 1280;
     int patternHeight_ = 720;
     int frameRateN_ = 60000;

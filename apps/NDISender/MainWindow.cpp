@@ -264,17 +264,17 @@ void MainWindow::onStart() {
         cfg.mode == NdiSendMode::HxH264 && cfg.enableVideo) {
         const int baseBitrate = sender_->getTargetBitrate(
             capture_->width(), capture_->height(), frameRateN_, frameRateD_);
-        const uint32_t bitrate = static_cast<uint32_t>(baseBitrate * cfg.hxBitrateMultiplier);
+        pendingHxBitrate_ = static_cast<uint32_t>(baseBitrate * cfg.hxBitrateMultiplier);
+        hxEncoderRequested_ = true;
+        encoderInitFailed_.store(false);
         encoder_->setCallback([this](const EncodedH264Frame& frame) {
             sender_->sendVideoH264(frame.data.data(), frame.data.size(),
                                    capture_->width(), capture_->height(),
                                    frameRateN_, frameRateD_, frame.timestamp100ns);
         });
-        if (!encoder_->open(capture_->width(), capture_->height(), frameRateN_, frameRateD_, bitrate,
-                            capture_->device())) {
-            QMessageBox::warning(this, tr("HX 编码"),
-                                 tr("Media Foundation H.264 编码器初始化失败，请检查系统编码器"));
-        }
+    } else {
+        hxEncoderRequested_ = false;
+        pendingHxBitrate_ = 0;
     }
 
     if (cfg.enableAudio && activeVideoSource_ == NdiVideoSourceChoice::ScreenCapture) {
@@ -303,11 +303,9 @@ void MainWindow::onStart() {
                                   .arg(patternHeight_)
                                   .arg(fourCc));
     } else if (activeConfig_.mode == NdiSendMode::HxH264) {
-        const QString gpuTag = encoder_->usesGpuPath() ? tr("GPU") : tr("CPU");
-        statusLabel_->setText(tr("状态: HX 推流中 (%1x%2, %3 编码)")
+        statusLabel_->setText(tr("状态: HX 推流中 (%1x%2)...")
                                   .arg(capture_->width())
-                                  .arg(capture_->height())
-                                  .arg(gpuTag));
+                                  .arg(capture_->height()));
     } else {
         statusLabel_->setText(tr("状态: 推流中 (%1x%2)\n发送 FourCC: %3")
                                   .arg(capture_->width())
@@ -325,7 +323,7 @@ void MainWindow::onStop() {
         captureThread_.join();
     }
     audioCapture_->stop();
-    encoder_->close();
+    hxEncoderRequested_ = false;
     sender_->flushVideoAsync();
     sender_->destroy();
     capture_->close();
@@ -338,6 +336,15 @@ void MainWindow::runCaptureLoop() {
     CapturedGpuFrame gpuFrame;
     std::vector<uint8_t> patternBuffer;
     uint64_t patternFrameIndex = 0;
+
+    const bool wantHxEncoder = hxEncoderRequested_;
+    if (wantHxEncoder) {
+        if (!encoder_->open(capture_->width(), capture_->height(), frameRateN_, frameRateD_,
+                            pendingHxBitrate_, capture_->device())) {
+            encoderInitFailed_.store(true);
+            QMetaObject::invokeMethod(this, "onEncoderInitFailed", Qt::QueuedConnection);
+        }
+    }
 
     while (running_.load()) {
         const auto cfg = activeConfig_;
@@ -383,6 +390,16 @@ void MainWindow::runCaptureLoop() {
                                frameRateN_, frameRateD_, cfg.colorFormat);
         }
     }
+
+    if (wantHxEncoder || encoder_->isOpen()) {
+        encoder_->close();
+    }
+}
+
+void MainWindow::onEncoderInitFailed() {
+    QMessageBox::warning(this, tr("HX 编码"),
+                         tr("Media Foundation H.264 编码器初始化失败，请检查系统编码器"));
+    statusLabel_->setText(tr("状态: HX 编码器初始化失败"));
 }
 
 void MainWindow::sampleBufferAlphaRange(const uint8_t* data, int width, int height, int stride,
@@ -437,6 +454,18 @@ void MainWindow::updateStatus() {
                                   .arg(capture_->width())
                                   .arg(capture_->height())
                                   .arg(fourCc));
+        return;
+    }
+
+    if (encoderInitFailed_.load()) {
+        statusLabel_->setText(tr("状态: HX 编码器初始化失败"));
+        return;
+    }
+
+    if (!encoder_->isOpen()) {
+        statusLabel_->setText(tr("状态: HX 推流中 (%1x%2)...")
+                                  .arg(capture_->width())
+                                  .arg(capture_->height()));
         return;
     }
 

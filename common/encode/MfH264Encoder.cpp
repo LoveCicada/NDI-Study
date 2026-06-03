@@ -45,12 +45,22 @@ bool MfH264Encoder::open(int width, int height, int frameRateN, int frameRateD, 
     d3dDevice_ = d3dDevice;
 
     if (!impl_->comInitialized) {
-        if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED))) {
+        const HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+        if (hr == RPC_E_CHANGED_MODE) {
+            return false;
+        }
+        if (FAILED(hr)) {
             return false;
         }
         impl_->comInitialized = true;
     }
-    if (FAILED(MFStartup(MF_VERSION))) {
+
+    const HRESULT hr = MFStartup(MF_VERSION);
+    if (FAILED(hr)) {
+        if (impl_->comInitialized) {
+            CoUninitialize();
+            impl_->comInitialized = false;
+        }
         return false;
     }
 
@@ -98,6 +108,11 @@ void MfH264Encoder::close() {
         MFShutdown();
     }
     open_ = false;
+
+    if (impl_->comInitialized) {
+        CoUninitialize();
+        impl_->comInitialized = false;
+    }
 }
 
 bool MfH264Encoder::createCpuEncoder(int width, int height, int frameRateN, int frameRateD, uint32_t bitrate) {
