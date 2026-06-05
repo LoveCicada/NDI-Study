@@ -79,3 +79,8 @@ DXGI DuplicateOutput → GPU BGRA 纹理
 - [Sending Video Frames (H.264)](https://docs.ndi.video/all/developing-with-ndi/advanced-sdk/using-h.264-h.265-and-aac-codecs/sending-video-frames)
 - [Decoding with NDI](https://docs.ndi.video/all/developing-with-ndi/developer-guides/decoding-with-ndi)
 - NVIDIA [nvEncDXGIOutputDuplicationSample](https://github.com/NVIDIA/video-sdk-samples/blob/master/nvEncDXGIOutputDuplicationSample/main.cpp)
+
+## 6. 延伸阅读
+
+- [11-Media-Foundation框架介绍与使用](11-Media-Foundation框架介绍与使用.md) — MF 框架原理、硬件加速机制、驱动检测、与 FFmpeg/DXVA2 对比及选型分析
+- [10-COM套间与HX编码线程问题](10-COM套间与HX编码线程问题.md) — `MfH264Encoder` COM 套间冲突与修复

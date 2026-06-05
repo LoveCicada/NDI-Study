@@ -14,6 +14,9 @@
 | [06-功能清单与变更记录.md](06-功能清单与变更记录.md) | Demo 功能清单、BUG 修复与版本变更记录 |
 | [07-NDIReceiver预览渲染与Alpha混合.md](07-NDIReceiver预览渲染与Alpha混合.md) | 棋盘格背景、DX11 Alpha 混合、RenderDoc 对照 |
 | [08-软件整体架构与UML设计.md](08-软件整体架构与UML设计.md) | 整体架构、运行流程图、时序图、各模块 UML 类图 |
+| [09-NDI发送端GPU与硬件加速调研.md](09-NDI发送端GPU与硬件加速调研.md) | NDI 发送端 GPU 纹理与硬件编码支持、HX GPU 管线 |
+| [10-COM套间与HX编码线程问题.md](10-COM套间与HX编码线程问题.md) | HX H.264 模式下 COM 套间冲突根因与修复方案 |
+| [11-Media-Foundation框架介绍与使用.md](11-Media-Foundation框架介绍与使用.md) | MF 框架定位、硬件加速、驱动检测、与 FFmpeg/DXVA2 对比 |
 
 ## 工程说明
 
